@@ -59,6 +59,7 @@ app/src/main/java/com/netmusiclite/
 
 - [2026-10-18 播放通知与媒体控制](docs/updates/2026-10-18-播放通知与媒体控制.md)
 - [2026-10-18 Wear OS 媒体通知适配](docs/updates/2026-10-18-WearOS通知适配.md)
+- [2026-10-18 我的歌单新增收藏歌单与推荐歌单](docs/updates/2026-10-18-歌单收藏与推荐.md)
 
 ## 免责声明
 

@@ -1091,19 +1091,84 @@ object NcmApi {
     }
 
     // ---------- 歌单 ----------
+    /**
+     * 用户歌单：创建 + 收藏一次取回。
+     *
+     * `/user/playlist` 的 `subscribed` 字段就是「当前登录用户是否收藏」：
+     *  - 自己创建的 → subscribed=false（含 specialType=5 我喜欢的音乐、20 年度歌单）
+     *  - 收藏别人的/官方动态歌单 → subscribed=true
+     * 分页按 limit=100 递增 offset，接口可能首包多塞「我喜欢的音乐」，所以用 id 去重，
+     * 不拿返回数组长度当 offset（否则会漏歌单）。
+     */
     suspend fun userPlaylists(uid: Long): List<PlaylistItem> = withContext(Dispatchers.IO) {
-        val j = we("/user/playlist",
-            JSONObject().put("uid", uid).put("limit", 40).put("offset", 0).put("includeVideo", true))
+        val out = LinkedHashMap<Long, PlaylistItem>()
+        var offset = 0
+        while (offset < 1000) {
+            val before = out.size
+            val j = we("/user/playlist",
+                JSONObject().put("uid", uid).put("limit", 100).put("offset", offset).put("includeVideo", true))
+            if (!ok(j)) break
+            val arr = j.optJSONArray("playlist") ?: break
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optLong("id")
+                if (id <= 0) continue
+                val creator = o.optJSONObject("creator")
+                out[id] = PlaylistItem(
+                    id = id,
+                    name = o.optString("name"),
+                    coverUrl = o.optString("coverImgUrl").takeIf { it.isNotEmpty() },
+                    trackCount = o.optInt("trackCount"),
+                    playCount = o.optLong("playCount"),
+                    isMine = creator?.optLong("userId") == uid,
+                    subscribed = o.optBoolean("subscribed", false),
+                    creatorName = creator?.optString("nickname")?.takeIf { it.isNotBlank() },
+                    specialType = o.optInt("specialType"),
+                )
+            }
+            if (!j.optBoolean("more", false) || arr.length() == 0) break
+            // 接口异常/忽略 offset 时避免无限翻同一页
+            if (out.size == before) break
+            offset += 100
+        }
+        out.values.toList()
+    }
+
+    /**
+     * 推荐歌单（匿名可用）：`/personalized/playlist`。
+     * 返回字段用 picUrl / trackCount / playCount，直接映射成 PlaylistItem；
+     * 推荐项默认未收藏，用户在列表里点「+」时再走 subscribe。
+     */
+    suspend fun recommendPlaylists(limit: Int = 12): List<PlaylistItem> = withContext(Dispatchers.IO) {
+        val j = we("/personalized/playlist", JSONObject().put("limit", limit))
         if (!ok(j)) return@withContext emptyList()
-        val arr = j.optJSONArray("playlist") ?: return@withContext emptyList()
+        val arr = j.optJSONArray("result") ?: return@withContext emptyList()
         (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optLong("id")
+            if (id <= 0) return@mapNotNull null
             PlaylistItem(
-                id = o.optLong("id"), name = o.optString("name"), coverUrl = o.optString("coverImgUrl"),
-                trackCount = o.optInt("trackCount"), playCount = o.optLong("playCount"),
-                isMine = o.optJSONObject("creator")?.optLong("userId") == uid,
+                id = id,
+                name = o.optString("name"),
+                coverUrl = o.optString("picUrl").takeIf { it.isNotEmpty() },
+                trackCount = o.optInt("trackCount"),
+                playCount = o.optLong("playCount"),
+                isMine = false,
+                subscribed = false,
             )
         }
+    }
+
+    /** 收藏歌单（t=1）；写操作走 weWrite：PC 客户端标识 + __csrf */
+    suspend fun subscribePlaylist(id: Long): Boolean = withContext(Dispatchers.IO) {
+        val j = weWrite("/playlist/subscribe", JSONObject().put("id", id).put("t", 1))
+        ok(j) || j.optJSONObject("body")?.optInt("code") == 200
+    }
+
+    /** 取消收藏歌单 */
+    suspend fun unsubscribePlaylist(id: Long): Boolean = withContext(Dispatchers.IO) {
+        val j = weWrite("/playlist/unsubscribe", JSONObject().put("id", id))
+        ok(j) || j.optJSONObject("body")?.optInt("code") == 200
     }
 
     suspend fun playlistDetail(id: Long): Pair<PlaylistItem, List<Song>>? = withContext(Dispatchers.IO) {

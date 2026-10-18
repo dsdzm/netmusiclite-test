@@ -52,6 +52,12 @@ data class PlaylistItem(
     val trackCount: Int,
     val playCount: Long,
     val isMine: Boolean,
+    /** 当前登录用户是否收藏了该歌单（/user/playlist 的 subscribed 字段） */
+    val subscribed: Boolean = false,
+    /** 创建者昵称：收藏歌单在列表里显示来源 */
+    val creatorName: String? = null,
+    /** 5 = 我喜欢的音乐，20 = 年度歌单；用于展示/区分，不参与业务判断 */
+    val specialType: Int = 0,
 )
 
 @Immutable

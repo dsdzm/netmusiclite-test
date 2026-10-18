@@ -65,6 +65,24 @@ object PageCache {
         return fresh
     }
 
+    // ---------- 推荐歌单（匿名可拉，会话级缓存）----------
+    @Volatile private var recommend: List<PlaylistItem>? = null
+
+    fun invalidateRecommend() { recommend = null }
+
+    /**
+     * force=true 用于「换一批」；网络失败且非强制刷新时退回上次缓存。
+     */
+    suspend fun recommendPlaylists(force: Boolean = false): List<PlaylistItem> {
+        if (!force) recommend?.let { return it }
+        val fresh = runCatching { NcmApi.recommendPlaylists() }.getOrDefault(emptyList())
+        if (fresh.isNotEmpty()) {
+            recommend = fresh
+            return fresh
+        }
+        return if (force) emptyList() else recommend ?: emptyList()
+    }
+
     // ---------- 收藏的专辑（2026-09-30：「我创建的歌单」页新增「收藏的专辑」分栏）----------
     // 与歌单列表同款会话级缓存：进过一次就吃缓存，收藏/取消收藏后由 invalidate 清理
     @Volatile private var albumsUid = -1L

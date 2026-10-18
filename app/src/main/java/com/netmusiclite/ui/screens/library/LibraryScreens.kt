@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +72,7 @@ import com.netmusiclite.ui.theme.TextSecondary
 import com.netmusiclite.ui.components.ListFilterCard
 import com.netmusiclite.ui.components.rememberAliasAwareSongs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** 每日推荐：真实接口，点歌即播（歌曲行卡片堆叠）；长按进入多选下载 */
 @Composable
@@ -327,25 +329,46 @@ private fun LikedCoverHeader(song: Song, count: Int) {
 }
 
 /**
- * 我的歌单库（2026-09-30 新增分栏）：
- * 顶部两枚胶囊「创建的歌单 / 收藏的专辑」点击切换 —— 创建的歌单原样保留，新增收藏的专辑一栏，
- * 专辑卡与歌单卡同一套堆叠玻璃样式（封面 + 名称 + 艺人·曲目数），点击进专辑详情页
- * （复用 Routes.albumDetail，与艺人页「专辑」Tab 同一入口，详情页无需改动）。
- * 收藏专辑列表走 PageCache 会话级缓存：切栏才拉取、拉过一次不再重复联网。
+ * 我的歌单库（2026-10-18：新增收藏歌单 / 推荐歌单）。
+ *
+ * 顶部两枚胶囊「我的歌单 / 收藏的专辑」：
+ *  - 我的歌单页分三段：我创建的歌单、我收藏的歌单（/user/playlist 的 subscribed=true，
+ *    含官方动态/年度歌单）、推荐歌单（/personalized/playlist，匿名可拉）。
+ *  - 推荐卡片右侧「+」直接收藏，成功后刷新「我收藏的歌单」；右上角刷新键换一批。
+ *  - 收藏的专辑仍走原 album/sublist 分栏，逻辑不变。
  */
 @Composable
 fun MyPlaylistsScreen(nav: NavHostController) {
-    var tab by remember { mutableStateOf(0) }          // 0 = 创建的歌单；1 = 收藏的专辑
-    var playlists by remember { mutableStateOf<List<PlaylistItem>>(emptyList()) }
+    var tab by remember { mutableStateOf(0) }          // 0 = 我的歌单；1 = 收藏的专辑
+    var created by remember { mutableStateOf<List<PlaylistItem>>(emptyList()) }
+    var collected by remember { mutableStateOf<List<PlaylistItem>>(emptyList()) }
+    var recommended by remember { mutableStateOf<List<PlaylistItem>>(emptyList()) }
     var albums by remember { mutableStateOf<List<AlbumItem>>(emptyList()) }
     var albumsLoaded by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
+    var recommendLoading by remember { mutableStateOf(true) }
+    var toast by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun loadPlaylists() {
+        val all = PageCache.userPlaylists(SessionStore.uid)
+        val mine = all.filter { it.isMine && !it.subscribed }
+        // 兜底：接口 creator 缺失时，至少不要把收藏项混进创建列表
+        created = mine.ifEmpty { all.filter { !it.subscribed } }
+        collected = all.filter { it.subscribed }
+        // 推荐项的「已收藏」状态以收藏列表为准，避免刷新后按钮又变回 +
+        val collectedIds = collected.map { it.id }.toSet()
+        recommended = recommended.map { it.copy(subscribed = it.id in collectedIds) }
+    }
 
     LaunchedEffect(Unit) {
-        val all = PageCache.userPlaylists(SessionStore.uid)
-        playlists = all.filter { it.isMine }
-        if (playlists.isEmpty()) playlists = all // 兜底：接口 creator 字段缺失时全量展示
+        loadPlaylists()
         loading = false
+        recommendLoading = true
+        val collectedIds = collected.map { it.id }.toSet()
+        recommended = PageCache.recommendPlaylists()
+            .map { it.copy(subscribed = it.id in collectedIds) }
+        recommendLoading = false
     }
     // 收藏专辑按需加载：切到该栏且没拉过才发请求（首屏/歌单一栏零额外开销）
     LaunchedEffect(tab) {
@@ -354,99 +377,279 @@ fun MyPlaylistsScreen(nav: NavHostController) {
             albumsLoaded = true
         }
     }
-
-    val total = if (tab == 0) playlists.size else albums.size
-    StackedCardList(
-        title = if (tab == 0) "我创建的歌单" else "收藏的专辑",
-        progressTotal = total + 2,
-        // 2026-10-01：补上 horizontalInsetPx = 10 —— 此前缺省为 0，卡片比主页宽 20px，
-        // 两页并排看宽度对不齐（主页/我喜欢/每日推荐等均为 10）。
-        horizontalInsetPx = 10,
-    ) {
-        item(key = "switch") {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                listOf(0 to "创建的歌单", 1 to "收藏的专辑").forEach { (t, label) ->
-                    val selected = tab == t
-                    Text(
-                        label,
-                        fontSize = 11.sp,
-                        color = if (selected) Accent else TextPrimary,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier
-                            .padding(horizontal = 6.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(if (selected) AccentSoft else SurfaceGlass)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) { tab = t }
-                            .padding(horizontal = 13.dp, vertical = 5.dp),
-                    )
-                }
-            }
+    LaunchedEffect(toast) {
+        if (toast != null) {
+            delay(2200)
+            toast = null
         }
-        if (tab == 0) {
-            if (loading) {
-                item { CenterHint("加载中…", Modifier.fillMaxWidth().height(240.dp)) }
-            } else if (playlists.isEmpty()) {
-                item { CenterHint("还没有创建歌单\n播放页 · 更多 · 收藏 可新建", Modifier.fillMaxWidth().height(240.dp)) }
-            } else {
-                itemsIndexed(playlists, key = { _, p -> p.id }, contentType = { _, _ -> "playlist" }) { _, pl ->
-                    StackedCard(
-                        onClick = { nav.navigateWithMotion(Routes.playlistDetail(pl.id)) },
-                        navMotionKind = NavMotionKind.Pill,
-                    ) {
-                        CoverImage(pl.coverUrl, 44.dp, shape = RoundedCornerShape(11.dp))
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(pl.name, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${pl.trackCount} 首", fontSize = 9.sp, color = TextSecondary)
-                        }
-                        Icon(
-                            NcmIcons.ChevronRight, null,
-                            tint = Color.White.copy(alpha = 0.35f),
-                            modifier = Modifier.size(15.dp),
+    }
+
+    val total = if (tab == 0) created.size + collected.size + recommended.size + 3 else albums.size
+    Box(Modifier.fillMaxSize()) {
+        StackedCardList(
+            modifier = Modifier.fillMaxSize(),
+            title = if (tab == 0) "我的歌单" else "收藏的专辑",
+            progressTotal = total + 2,
+            // 2026-10-01：补上 horizontalInsetPx = 10 —— 此前缺省为 0，卡片比主页宽 20px，
+            // 两页并排看宽度对不齐（主页/我喜欢/每日推荐等均为 10）。
+            horizontalInsetPx = 10,
+        ) {
+            item(key = "switch") {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    listOf(0 to "我的歌单", 1 to "收藏的专辑").forEach { (t, label) ->
+                        val selected = tab == t
+                        Text(
+                            label,
+                            fontSize = 11.sp,
+                            color = if (selected) Accent else TextPrimary,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(if (selected) AccentSoft else SurfaceGlass)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { tab = t }
+                                .padding(horizontal = 13.dp, vertical = 5.dp),
                         )
                     }
                 }
             }
-        } else {
-            if (!albumsLoaded) {
-                item { CenterHint("加载中…", Modifier.fillMaxWidth().height(240.dp)) }
-            } else if (albums.isEmpty()) {
-                item { CenterHint("还没有收藏专辑\n专辑页点收藏即可加入这里", Modifier.fillMaxWidth().height(240.dp)) }
+
+            if (tab == 0) {
+                item(key = "created_header") {
+                    PlaylistSectionHeader("我创建的歌单", created.size)
+                }
+                if (loading) {
+                    item { CenterHint("加载中…", Modifier.fillMaxWidth().height(150.dp)) }
+                } else if (created.isEmpty()) {
+                    item {
+                        CenterHint(
+                            "还没有创建歌单\n播放页 · 更多 · 收藏 可新建",
+                            Modifier.fillMaxWidth().height(120.dp),
+                        )
+                    }
+                } else {
+                    itemsIndexed(created, key = { _, p -> "c_${p.id}" }, contentType = { _, _ -> "playlist" }) { _, pl ->
+                        PlaylistCard(pl, subtitle = "${pl.trackCount} 首") {
+                            nav.navigateWithMotion(Routes.playlistDetail(pl.id), NavMotionSpec(NavMotionKind.Pill))
+                        }
+                    }
+                }
+
+                item(key = "collected_header") {
+                    PlaylistSectionHeader("我收藏的歌单", collected.size)
+                }
+                if (loading) {
+                    item { CenterHint("加载中…", Modifier.fillMaxWidth().height(120.dp)) }
+                } else if (collected.isEmpty()) {
+                    item {
+                        CenterHint(
+                            "还没有收藏歌单\n在推荐或歌单详情里点收藏",
+                            Modifier.fillMaxWidth().height(120.dp),
+                        )
+                    }
+                } else {
+                    itemsIndexed(collected, key = { _, p -> "s_${p.id}" }, contentType = { _, _ -> "playlist" }) { _, pl ->
+                        PlaylistCard(
+                            pl,
+                            subtitle = listOfNotNull(
+                                pl.creatorName,
+                                "${pl.trackCount} 首",
+                            ).joinToString(" · "),
+                        ) {
+                            nav.navigateWithMotion(Routes.playlistDetail(pl.id), NavMotionSpec(NavMotionKind.Pill))
+                        }
+                    }
+                }
+
+                item(key = "recommend_header") {
+                    PlaylistSectionHeader("推荐歌单", recommended.size) {
+                        Icon(
+                            NcmIcons.Refresh,
+                            contentDescription = "换一批",
+                            tint = if (recommendLoading) TextSecondary.copy(alpha = 0.4f) else TextSecondary,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(50))
+                                .clickable(enabled = !recommendLoading) {
+                                    scope.launch {
+                                        recommendLoading = true
+                                        val ids = collected.map { it.id }.toSet()
+                                        val fresh = PageCache.recommendPlaylists(force = true)
+                                            .map { it.copy(subscribed = it.id in ids) }
+                                        if (fresh.isNotEmpty()) {
+                                            recommended = fresh
+                                        } else {
+                                            toast = "推荐加载失败"
+                                        }
+                                        recommendLoading = false
+                                    }
+                                }
+                                .padding(6.dp),
+                        )
+                    }
+                }
+                if (recommendLoading) {
+                    item { CenterHint("正在换一批…", Modifier.fillMaxWidth().height(120.dp)) }
+                } else if (recommended.isEmpty()) {
+                    item { CenterHint("暂无推荐", Modifier.fillMaxWidth().height(100.dp)) }
+                } else {
+                    itemsIndexed(recommended, key = { _, p -> "r_${p.id}" }, contentType = { _, _ -> "playlist" }) { _, pl ->
+                        PlaylistCard(
+                            pl,
+                            subtitle = "推荐 · ${pl.trackCount} 首",
+                            action = {
+                                PlaylistCollectButton(pl.subscribed) {
+                                    scope.launch {
+                                        val ok = NcmApi.subscribePlaylist(pl.id)
+                                        if (ok) {
+                                            // 先本地落位，避免等服务端 /user/playlist 回包才显示
+                                            collected = listOf(pl.copy(subscribed = true)) +
+                                                collected.filterNot { it.id == pl.id }
+                                            recommended = recommended.map {
+                                                if (it.id == pl.id) it.copy(subscribed = true) else it
+                                            }
+                                            PageCache.invalidatePlaylists()
+                                            // 不立即重新拉 /user/playlist：服务端回包可能滞后，
+                                            // 会把刚乐观插入的条目冲掉；下次进页面自然刷新。
+                                            toast = "已收藏「${pl.name}」"
+                                        } else {
+                                            toast = "收藏失败"
+                                        }
+                                    }
+                                }
+                            },
+                        ) {
+                            nav.navigateWithMotion(Routes.playlistDetail(pl.id), NavMotionSpec(NavMotionKind.Pill))
+                        }
+                    }
+                }
             } else {
-                itemsIndexed(albums, key = { _, a -> "al_${a.id}" }, contentType = { _, _ -> "album" }) { _, al ->
-                    StackedCard(
-                        onClick = {
-                            nav.navigateWithMotion(Routes.albumDetail(al.id), NavMotionSpec(NavMotionKind.Pill))
-                        },
-                        navMotionKind = NavMotionKind.Pill,
-                    ) {
-                        CoverImage(al.coverUrl, 44.dp, shape = RoundedCornerShape(11.dp))
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(al.name, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                listOf(al.artist, if (al.songCount > 0) "${al.songCount} 首" else "")
-                                    .filter { it.isNotBlank() }.joinToString(" · "),
-                                fontSize = 9.sp, color = TextSecondary,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                if (!albumsLoaded) {
+                    item { CenterHint("加载中…", Modifier.fillMaxWidth().height(240.dp)) }
+                } else if (albums.isEmpty()) {
+                    item { CenterHint("还没有收藏专辑\n专辑页点收藏即可加入这里", Modifier.fillMaxWidth().height(240.dp)) }
+                } else {
+                    itemsIndexed(albums, key = { _, a -> "al_${a.id}" }, contentType = { _, _ -> "album" }) { _, al ->
+                        StackedCard(
+                            onClick = {
+                                nav.navigateWithMotion(Routes.albumDetail(al.id), NavMotionSpec(NavMotionKind.Pill))
+                            },
+                            navMotionKind = NavMotionKind.Pill,
+                        ) {
+                            CoverImage(al.coverUrl, 44.dp, shape = RoundedCornerShape(11.dp))
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(al.name, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    listOf(al.artist, if (al.songCount > 0) "${al.songCount} 首" else "")
+                                        .filter { it.isNotBlank() }.joinToString(" · "),
+                                    fontSize = 9.sp, color = TextSecondary,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(
+                                NcmIcons.ChevronRight, null,
+                                tint = Color.White.copy(alpha = 0.35f),
+                                modifier = Modifier.size(15.dp),
                             )
                         }
-                        Icon(
-                            NcmIcons.ChevronRight, null,
-                            tint = Color.White.copy(alpha = 0.35f),
-                            modifier = Modifier.size(15.dp),
-                        )
                     }
                 }
             }
         }
+
+        toast?.let { msg ->
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCC2B2B33))
+                    .padding(horizontal = 16.dp, vertical = 7.dp),
+            ) {
+                Text(msg, fontSize = 11.sp, color = Color.White)
+            }
+        }
+    }
+}
+
+/** 歌单分区标题：标题 + 数量 + 可选右侧动作 */
+@Composable
+private fun PlaylistSectionHeader(
+    title: String,
+    count: Int,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
+        if (count > 0) {
+            Spacer(Modifier.width(5.dp))
+            Text("$count", fontSize = 9.sp, color = TextSecondary.copy(alpha = 0.65f))
+        }
+        Spacer(Modifier.weight(1f))
+        action?.invoke()
+    }
+}
+
+/** 歌单卡：创建/收藏/推荐共用；action 放右侧（推荐项的收藏键），最后统一是箭头 */
+@Composable
+private fun PlaylistCard(
+    pl: PlaylistItem,
+    subtitle: String,
+    action: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    StackedCard(
+        onClick = onClick,
+        navMotionKind = NavMotionKind.Pill,
+    ) {
+        CoverImage(pl.coverUrl, 44.dp, shape = RoundedCornerShape(11.dp))
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                pl.name, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                subtitle, fontSize = 9.sp, color = TextSecondary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        action?.invoke()
+        Icon(
+            NcmIcons.ChevronRight, null,
+            tint = Color.White.copy(alpha = 0.35f),
+            modifier = Modifier.size(15.dp),
+        )
+    }
+}
+
+/** 推荐卡右侧收藏键：未收藏显示 +，已收藏显示对勾并禁用 */
+@Composable
+private fun PlaylistCollectButton(subscribed: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .padding(end = 5.dp)
+            .size(30.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (subscribed) AccentSoft else SurfaceGlass)
+            .clickable(enabled = !subscribed, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (subscribed) NcmIcons.Check else NcmIcons.Plus,
+            contentDescription = if (subscribed) "已收藏" else "收藏歌单",
+            tint = if (subscribed) Accent else TextPrimary,
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
