@@ -81,6 +81,9 @@ dependencies {
     //   版本号必须完全一致，否则 common 会出现两份、运行时 cast 崩溃。
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    // Wear OS 通知：PlayerNotificationManager（media3-ui）负责媒体通知，
+    // 它内置 Wear 兼容模板；RemoteViews 在 Wear OS 上会被系统限制/降级。
+    implementation("androidx.media3:media3-ui:1.5.1")
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

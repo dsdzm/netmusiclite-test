@@ -58,6 +58,7 @@ app/src/main/java/com/netmusiclite/
 每次功能改动的实现原理、完整代码与移植步骤统一记录在 [`docs/updates/`](docs/updates/README.md)，方便上游新版按文档合并。
 
 - [2026-10-18 播放通知与媒体控制](docs/updates/2026-10-18-播放通知与媒体控制.md)
+- [2026-10-18 Wear OS 媒体通知适配](docs/updates/2026-10-18-WearOS通知适配.md)
 
 ## 免责声明
 

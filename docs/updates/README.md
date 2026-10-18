@@ -7,6 +7,7 @@
 | 日期 | 主题 | 文档 |
 |---|---|---|
 | 2026-10-18 | 播放通知与媒体控制（MediaStyle / Android 9 RemoteViews 兼容） | [播放通知与媒体控制](2026-10-18-播放通知与媒体控制.md) |
+| 2026-10-18 | Wear OS 媒体通知适配（PlayerNotificationManager） | [WearOS 通知适配](2026-10-18-WearOS通知适配.md) |
 
 ## 编写约定
 

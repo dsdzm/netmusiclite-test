@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 媒体通知渠道（普通 / 手表 / Wear OS 共用文案） -->
+    <string name="notif_channel_playing">正在播放</string>
+    <string name="notif_channel_playing_desc">显示当前歌曲信息，并提供上一首 / 播放暂停 / 下一首控制</string>
+</resources>

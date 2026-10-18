@@ -17,6 +17,12 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- 同一 APK 同时支持 Wear OS 与普通安卓：watch 特性声明为可选，
+         手机不受影响；Wear OS 运行时按 FEATURE_WATCH 走 PlayerNotificationManager -->
+    <uses-feature
+        android:name="android.hardware.type.watch"
+        android:required="false" />
+
     <application
         android:name=".NetMusicLiteApp"
         android:allowBackup="false"

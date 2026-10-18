@@ -2,7 +2,6 @@ package com.netmusiclite.data
 
 import android.app.PendingIntent
 import android.content.Intent
-import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -77,7 +76,8 @@ class MusicSessionService : MediaSessionService() {
      * }
      * ```
      * 覆盖成空实现 → `defaultMethodCalled` 永远为 false → MediaNotificationManager 一次都不会被调，
-     * 既不发通知也不拉前台。保活与媒体通知统一由 [PlaybackService] 的 MediaStyle 通知负责，
+     * 既不发通知也不拉前台。保活与媒体通知统一由 [PlaybackService] 负责
+     * （非 Wear：MediaStyle / Android 9 RemoteViews；Wear OS：PlayerNotificationManager），
      * 否则手表上会出现两条一模一样的媒体通知。
      */
     override fun onUpdateNotification(session: MediaSession) = Unit
@@ -87,49 +87,5 @@ class MusicSessionService : MediaSessionService() {
         session = null
         super.onDestroy()
         // 注意：ExoPlayer 不在这里 release —— 它归 PlayerEngine，服务只借了引用
-    }
-
-    /**
-     * 把系统 UI 下发的 Player 命令翻译回 [PlayerEngine] 的业务动作。
-     *
-     * 为什么不能直接让 Media3 操作 ExoPlayer：NetMusicLite 的队列 / 播放模式 / 一起听协调
-     * 全在 PlayerEngine 里，而 ExoPlayer 每次只 `setMediaItem` 载入**一首**
-     * （见 `PlayerEngine.load`），直接 `seekToNextMediaItem()` 只会原地不动。
-     */
-    private class EnginePlayer(delegate: Player) : ForwardingPlayer(delegate) {
-
-        override fun play() = PlayerEngine.playAction()
-
-        override fun pause() = PlayerEngine.pauseAction()
-
-        /** 系统可能直接写 playWhenReady（媒体键/局域网控制器），同样走业务路径 */
-        override fun setPlayWhenReady(playWhenReady: Boolean) {
-            if (playWhenReady) play() else pause()
-        }
-
-        override fun seekTo(positionMs: Long) = PlayerEngine.seekTo(positionMs)
-
-        // 上/下一首：新老控制器的命令 ID 不同，四个入口都要接
-        override fun seekToNext() = PlayerEngine.next()
-        override fun seekToPrevious() = PlayerEngine.prev()
-        override fun seekToNextMediaItem() = PlayerEngine.next()
-        override fun seekToPreviousMediaItem() = PlayerEngine.prev()
-
-        /** 系统媒体面板的关闭键：与平台会话的 onStop 保持一致，只暂停不销毁会话 */
-        override fun stop() = PlayerEngine.pauseAction()
-
-        /**
-         * 追加「上/下一首」命令位：ExoPlayer 里始终只有一首歌（队列在 PlayerEngine），
-         * 默认命令集不含这几个位，系统 UI 就不会画出切歌按钮。
-         * 与 OPPO 示例包 `getAvailableCommands().addAll(5,6,7,8,9)` 是同一手法，
-         * 只是这里用常量名而不是数字，避免 media3 版本间编号漂移。
-         */
-        override fun getAvailableCommands(): Player.Commands =
-            super.getAvailableCommands().buildUpon()
-                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_TO_NEXT)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                .build()
     }
 }
