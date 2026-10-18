@@ -62,6 +62,7 @@ app/src/main/java/com/netmusiclite/
 - [2026-10-18 Wear OS 媒体通知适配](docs/updates/2026-10-18-WearOS通知适配.md)
 - [2026-10-18 我的歌单新增收藏歌单与推荐歌单](docs/updates/2026-10-18-歌单收藏与推荐.md)
 - [2026-10-18 收藏的歌单并入收藏栏，新增独立推荐页](docs/updates/2026-10-18-推荐页与收藏整合.md)
+- [2026-10-18 移植到上游 1.32 的对接指南](docs/updates/2026-10-18-移植到上游1.32.md)（配套代码见 [`docs/updates/port-1.32/`](docs/updates/port-1.32/)）
 
 ## 免责声明
 
