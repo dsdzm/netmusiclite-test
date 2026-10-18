@@ -1,6 +1,8 @@
 package com.netmusiclite.data
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -200,10 +202,15 @@ object PlayerEngine {
                 if (player == null) {
                     configPlayer(p)
                     player = p
-                    initMediaSession()
                 } else {
                     p.release() // 极端时序：ensurePlayer 已同步补建
                 }
+                // ★ 2026-10-18 修「冷启动抢跑丢 MediaSession」：
+                //   ensurePlayer() 在预热完成前同步补建播放器时，上面会走 release 分支，
+                //   旧版把 initMediaSession() 写在 if 里 —— 这条路径永远不建会话，
+                //   于是 MediaStyle 通知拿不到 token、蓝牙/系统媒体面板也全空，
+                //   直到进程重启才恢复。会话是幂等单例，这里对两条路径统一补建。
+                ensureMediaSession()
             }
         }
         ticker = scope.launch {
@@ -240,7 +247,15 @@ object PlayerEngine {
         return player ?: buildExoPlayer().also { exo ->
             configPlayer(exo)
             player = exo
+            // 同步补建同样要配会话：否则通知/线控/系统媒体面板全程拿不到 token。
+            // 调用方（load / sessionPlayerOrNull）都在主线程，符合 MediaSession 的线程要求。
+            ensureMediaSession()
         }
+    }
+
+    /** 幂等建会话：warmUp 与 ensurePlayer 两条初始化路径共用，避免任一路径漏建 */
+    private fun ensureMediaSession() {
+        if (mediaSession == null) initMediaSession()
     }
 
     /** 仅构建（重活：渲染器实例化+解码器扫描，50-150ms），可在后台线程调用——已显式 setLooper(Main)，
@@ -792,7 +807,14 @@ object PlayerEngine {
     // 播放状态与歌曲元数据回写给会话，蓝牙设备 UI 与系统媒体面板同步显示。
 
     private fun initMediaSession() {
+        if (mediaSession != null) return
         val ms = MediaSession(appCtx, "NetMusicLite")
+        // 媒体键/传输控制标志：Android 5+ 起框架据此把 AVRCP 按键路由到本会话；
+        // 缺了它部分车机/手表只显示「正在播放」但不派发按键。
+        ms.setFlags(
+            MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+                MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
+        )
         ms.setCallback(object : MediaSession.Callback() {
             override fun onPlay() = playAction()
             override fun onPause() = pauseAction()
@@ -802,6 +824,17 @@ object PlayerEngine {
             override fun onSeekTo(pos: Long) { seekTo(pos); updateMediaSession() }
             override fun onStop() = pauseAction()
         })
+        // 锁屏/系统媒体面板点击卡片回到 App（与通知正文的 PendingIntent 同一落点）
+        runCatching {
+            ms.setSessionActivity(
+                PendingIntent.getActivity(
+                    appCtx, 0,
+                    Intent(appCtx, com.netmusiclite.MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+            )
+        }
         ms.isActive = true
         mediaSession = ms
         updateMediaSession()
@@ -830,16 +863,31 @@ object PlayerEngine {
                 .build()
         )
         current?.let { s ->
-            ms.setMetadata(
-                MediaMetadata.Builder()
-                    .putString(MediaMetadata.METADATA_KEY_TITLE, s.title)
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, s.artist)
-                    .putString(MediaMetadata.METADATA_KEY_ALBUM, s.album)
-                    .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
-                    .build()
-            )
+            val builder = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, s.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, s.artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, s.album)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
+            // 封面 URI：系统媒体面板 / 蓝牙 AVRCP / 手表「正在播放」卡片都从会话元数据取图。
+            // 只上报 URI（不是 Bitmap），避免每次状态刷新都往 Binder 里塞一张图；
+            // 系统侧按需自行加载，失败就显示占位图，不影响播放。
+            coverUriFor(s)?.let { uri ->
+                builder.putString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI, uri.toString())
+                builder.putString(MediaMetadata.METADATA_KEY_ART_URI, uri.toString())
+            }
+            ms.setMetadata(builder.build())
+        } ?: run {
+            // 无当前歌曲时清掉旧元数据，防止系统面板残留上一首
+            ms.setMetadata(MediaMetadata.Builder().build())
         }
     }
+
+    /**
+     * 通知/系统媒体界面用的封面模型（本地文件、content Uri、网络 URL 皆可，交给 Coil 解码）。
+     * 复用界面层同一套解析，保证通知封面与 App 内显示的是同一张。
+     */
+    fun artworkModelFor(song: Song?): Any? =
+        song?.let { runCatching { com.netmusiclite.ui.components.songCoverModel(it) }.getOrNull() }
 
     private fun isActiveMedia(): Boolean {
         val mediaId = activeMediaId ?: return false
