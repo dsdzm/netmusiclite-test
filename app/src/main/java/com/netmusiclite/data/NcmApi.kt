@@ -1131,7 +1131,8 @@ object NcmApi {
             if (!j.optBoolean("more", false) || arr.length() == 0) break
             // 接口异常/忽略 offset 时避免无限翻同一页
             if (out.size == before) break
-            offset += 100
+            // 正常按 100 翻页；短页按实际条数推进，避免跳过数据
+            offset += arr.length().coerceAtMost(100)
         }
         out.values.toList()
     }
