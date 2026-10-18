@@ -1114,6 +1114,8 @@ object NcmApi {
                 val id = o.optLong("id")
                 if (id <= 0) continue
                 val creator = o.optJSONObject("creator")
+                // subscribed 正常是 Boolean，兼容个别版本返回 1/0 的情况
+                val subscribed = o.optBoolean("subscribed", false) || o.optInt("subscribed", 0) == 1
                 out[id] = PlaylistItem(
                     id = id,
                     name = o.optString("name"),
@@ -1121,7 +1123,7 @@ object NcmApi {
                     trackCount = o.optInt("trackCount"),
                     playCount = o.optLong("playCount"),
                     isMine = creator?.optLong("userId") == uid,
-                    subscribed = o.optBoolean("subscribed", false),
+                    subscribed = subscribed,
                     creatorName = creator?.optString("nickname")?.takeIf { it.isNotBlank() },
                     specialType = o.optInt("specialType"),
                 )
