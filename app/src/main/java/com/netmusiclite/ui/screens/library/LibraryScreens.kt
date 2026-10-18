@@ -379,7 +379,7 @@ fun MyPlaylistsScreen(nav: NavHostController) {
                 Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.Center,
             ) {
-                listOf(0 to "创建", 1 to "收藏").forEach { (t, label) ->
+                listOf(0 to "创建", 1 to "收藏的专辑和歌单").forEach { (t, label) ->
                     val selected = tab == t
                     Text(
                         label,
