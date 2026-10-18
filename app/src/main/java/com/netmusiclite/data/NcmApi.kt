@@ -1143,7 +1143,8 @@ object NcmApi {
      * 推荐项默认未收藏，用户在列表里点「+」时再走 subscribe。
      */
     suspend fun recommendPlaylists(limit: Int = 12): List<PlaylistItem> = withContext(Dispatchers.IO) {
-        val j = we("/personalized/playlist", JSONObject().put("limit", limit))
+        // 这条匿名读接口走明文 GET 最稳（2026-10-18 实测 /api/personalized/playlist 直接返回 result）
+        val j = getJson("https://music.163.com/api/personalized/playlist?limit=$limit")
         if (!ok(j)) return@withContext emptyList()
         val arr = j.optJSONArray("result") ?: return@withContext emptyList()
         (0 until arr.length()).mapNotNull { i ->
