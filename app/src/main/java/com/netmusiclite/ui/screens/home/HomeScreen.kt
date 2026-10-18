@@ -49,6 +49,7 @@ private val homeItems = listOf(
     HomeItem("搜索", NcmIcons.Search, Routes.SEARCH),
     HomeItem("正在播放", NcmIcons.NowPlaying, Routes.PLAYER),
     HomeItem("每日推荐", NcmIcons.DailyRec, Routes.DAILY_RECOMMEND),
+    HomeItem("推荐", NcmIcons.HeartMode, Routes.RECOMMEND),
     HomeItem("我喜欢", NcmIcons.Heart, Routes.LIKED_SONGS),
     HomeItem("听歌排行", NcmIcons.Chart, Routes.RECORD),
     HomeItem("最近播放", NcmIcons.History, Routes.PLAY_HISTORY),

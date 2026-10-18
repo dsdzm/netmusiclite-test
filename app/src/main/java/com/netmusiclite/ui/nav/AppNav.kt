@@ -68,6 +68,7 @@ import com.netmusiclite.ui.screens.player.MoreScreen
 import com.netmusiclite.ui.screens.player.PlayerScreen
 import com.netmusiclite.ui.screens.player.QueueScreen
 import com.netmusiclite.ui.screens.roam.PrivateRoamScreen
+import com.netmusiclite.ui.screens.recommend.RecommendScreen
 import com.netmusiclite.ui.screens.search.ArtistScreen
 import com.netmusiclite.ui.screens.search.SearchScreen
 import com.netmusiclite.ui.screens.settings.AccountScreen
@@ -420,6 +421,7 @@ fun AppRoot() {
             },
         )
         composable(Routes.DAILY_RECOMMEND, content = backable { DailyRecommendScreen(nav) })
+        composable(Routes.RECOMMEND, content = backable { RecommendScreen(nav) })
         // 左划进播放页（与我喜欢的/歌单列表页，用户要求 2026-09-25）
         composable(
             Routes.LIKED_SONGS,

@@ -1163,6 +1163,13 @@ object NcmApi {
         }
     }
 
+    /** 推荐新歌（匿名可用）：/personalized/newsong?type=recommend */
+    suspend fun recommendNewSongs(limit: Int = 12): List<Song> = withContext(Dispatchers.IO) {
+        val j = getJson("https://music.163.com/api/personalized/newsong?type=recommend&limit=$limit")
+        if (!ok(j)) return@withContext emptyList()
+        songs(j.optJSONArray("result"))
+    }
+
     /** 收藏歌单（t=1）；写操作走 weWrite：PC 客户端标识 + __csrf */
     suspend fun subscribePlaylist(id: Long): Boolean = withContext(Dispatchers.IO) {
         val j = weWrite("/playlist/subscribe", JSONObject().put("id", id).put("t", 1))
