@@ -281,6 +281,23 @@ object NcmIcons {
         s(2.2f) { moveTo(18.5f, 19.5f); lineTo(18.5f, 4.5f) }
     } }
 
+    /** 官方排行榜（奖杯）：杯身 + 双耳 + 底座，与「听歌排行」的柱状图区分 */
+    val Toplist: ImageVector by lazy { icon("Toplist") {
+        s(1.9f) {
+            moveTo(8.2f, 4.2f); lineTo(15.8f, 4.2f); lineTo(15f, 10.6f)
+            curveTo(14.8f, 13.2f, 13.6f, 14.8f, 12f, 14.8f)
+            curveTo(10.4f, 14.8f, 9.2f, 13.2f, 9f, 10.6f); close()
+        }
+        s(1.9f) {
+            moveTo(8.2f, 5.6f); curveTo(5.6f, 5.6f, 5.4f, 10.2f, 8.8f, 10.4f)
+        }
+        s(1.9f) {
+            moveTo(15.8f, 5.6f); curveTo(18.4f, 5.6f, 18.6f, 10.2f, 15.2f, 10.4f)
+        }
+        s(1.9f) { moveTo(12f, 14.8f); lineTo(12f, 18f) }
+        s(1.9f) { moveTo(8.4f, 19.8f); lineTo(15.6f, 19.8f) }
+    } }
+
     /** 评论（对话气泡） */
     val CommentIc: ImageVector by lazy { icon("CommentIc") {
         s(1.8f) { moveTo(12f, 4.5f); curveTo(7.6f, 4.5f, 4.2f, 7.4f, 4.2f, 11f); curveTo(4.2f, 13f, 5.3f, 14.8f, 7f, 16f); lineTo(6.4f, 19.5f); lineTo(10f, 17.4f); curveTo(10.6f, 17.5f, 11.3f, 17.6f, 12f, 17.6f); curveTo(16.4f, 17.6f, 19.8f, 14.6f, 19.8f, 11f); curveTo(19.8f, 7.4f, 16.4f, 4.5f, 12f, 4.5f); close() }

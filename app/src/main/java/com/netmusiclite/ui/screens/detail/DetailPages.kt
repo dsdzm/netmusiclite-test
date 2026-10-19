@@ -172,6 +172,8 @@ fun AlbumScreen(nav: NavHostController, albumId: Long) {
                 SongRow(
                     song = song,
                     isCurrent = PlayerEngine.current?.id == song.id,
+                    // 歌单/专辑详情带 privileges：明确不可播的曲目置灰，避免点下去才失败
+                    unavailable = song.available == false,
                     selected = selected.containsKey(song.id),
                     selectMode = selectMode,
                     onClick = {
@@ -274,6 +276,8 @@ fun PlaylistDetailScreen(nav: NavHostController, playlistId: Long) {
                 SongRow(
                     song = song,
                     isCurrent = PlayerEngine.current?.id == song.id,
+                    // 歌单/专辑详情带 privileges：明确不可播的曲目置灰，避免点下去才失败
+                    unavailable = song.available == false,
                     selected = selected.containsKey(song.id),
                     selectMode = selectMode,
                     onClick = {

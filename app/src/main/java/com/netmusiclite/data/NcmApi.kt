@@ -151,6 +151,33 @@ object NcmApi {
 
     private fun ok(j: JSONObject): Boolean = j.optInt("code", 0) == 200
 
+    /**
+     * 版权状态：`privileges[]` → 「歌曲 id → 是否可播」。
+     *
+     * 判定用 `st` 与 `pl`，**不能用 `fee`**：
+     *  - `st < 0` 表示已下架；
+     *  - `pl` 是**可播码率**（320000 = 320kbps），不是布尔，`pl == 0` 才是真的没得放；
+     *  - `fee` 只描述收费类型（0 免费 / 1 VIP / 8 低音质免费），VIP 歌仍然可播。
+     */
+    private fun privilegeMap(arr: JSONArray?): Map<Long, Boolean> {
+        arr ?: return emptyMap()
+        val m = HashMap<Long, Boolean>(arr.length() * 2)
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optLong("id")
+            if (id <= 0L) continue
+            m[id] = o.optInt("st", 0) >= 0 && o.optInt("pl", 0) > 0
+        }
+        return m
+    }
+
+    /** 把 privileges 贴到歌曲上；没有 privileges 的接口保持 null（未知），不要猜 */
+    private fun List<Song>.withPrivilege(arr: JSONArray?): List<Song> {
+        val m = privilegeMap(arr)
+        if (m.isEmpty()) return this
+        return map { s -> m[s.id]?.let { s.copy(available = it) } ?: s }
+    }
+
     // ---------- 解析器 ----------
     fun parseSong(o: JSONObject): Song = Song(
         id = o.optLong("id"),
@@ -552,32 +579,114 @@ object NcmApi {
     }
 
     // ---------- 搜索 ----------
-    data class SearchResult(val songs: List<Song>, val artists: List<ArtistItem>, val albums: List<AlbumItem>)
+    data class SearchResult(
+        val songs: List<Song>,
+        val artists: List<ArtistItem>,
+        val albums: List<AlbumItem>,
+        /** 是否还有下一页（服务端 `result.hasMore`）；false 时 UI 停止加载 */
+        val hasMore: Boolean = false,
+        /** 命中总数（服务端 `result.songCount`）；0 表示服务端未返回 */
+        val total: Int = 0,
+    )
 
-    suspend fun search(kw: String, limit: Int = 20): SearchResult = withContext(Dispatchers.IO) {
+    /**
+     * 综合搜索（单曲 + 艺人 + 专辑）。
+     *
+     * [offset] 用于翻页：服务端 `limit` 上限 100（传 1000 会返回空列表），
+     * 翻到 `hasMore=false` 就必须停，否则会一直发空请求。
+     */
+    suspend fun search(kw: String, limit: Int = 20, offset: Int = 0): SearchResult = withContext(Dispatchers.IO) {
         val body = JSONObject()
-            .put("s", kw).put("limit", limit).put("offset", 0)
+            .put("s", kw).put("limit", limit).put("offset", offset)
             .put("type", 1).put("csrf_token", "").put("hlpretag", "").put("hlposttag", "")
         val songsJ = we("/cloudsearch/get/web", body)
-        val songList = songsJ.optJSONObject("result")?.optJSONArray("songs").let { songs(it) }
-        val artistsJ = we("/cloudsearch/get/web", JSONObject(body.toString()).put("type", 100))
-        val artists = artistsJ.optJSONObject("result")?.optJSONArray("artists")?.let { arr ->
-            (0 until arr.length()).mapNotNull { o ->
-                (arr.optJSONObject(o) ?: return@mapNotNull null).let {
-                    ArtistItem(it.optLong("id"), it.optString("name"), it.optString("img1v1Url").ifEmpty { it.optString("picUrl") })
+        val songsRes = songsJ.optJSONObject("result")
+        val songList = songs(songsRes?.optJSONArray("songs"))
+        // 翻页（offset>0）只取单曲：艺人与专辑在首屏已经有了，重复拉两趟纯浪费
+        val artists = if (offset == 0) {
+            val artistsJ = we("/cloudsearch/get/web", JSONObject(body.toString()).put("type", 100))
+            artistsJ.optJSONObject("result")?.optJSONArray("artists")?.let { arr ->
+                (0 until arr.length()).mapNotNull { o ->
+                    (arr.optJSONObject(o) ?: return@mapNotNull null).let {
+                        ArtistItem(it.optLong("id"), it.optString("name"), it.optString("img1v1Url").ifEmpty { it.optString("picUrl") })
+                    }
                 }
-            }
-        } ?: emptyList()
-        val albumsJ = we("/cloudsearch/get/web", JSONObject(body.toString()).put("type", 10))
-        val albums = albumsJ.optJSONObject("result")?.optJSONArray("albums")?.let { arr ->
-            (0 until arr.length()).mapNotNull { o ->
-                (arr.optJSONObject(o) ?: return@mapNotNull null).let {
-                    AlbumItem(it.optLong("id"), it.optString("name"), it.optString("picUrl"),
-                        it.optJSONObject("artist")?.optString("name") ?: "", it.optLong("publishTime"), it.optInt("size"))
+            } ?: emptyList()
+        } else emptyList()
+        val albums = if (offset == 0) {
+            val albumsJ = we("/cloudsearch/get/web", JSONObject(body.toString()).put("type", 10))
+            albumsJ.optJSONObject("result")?.optJSONArray("albums")?.let { arr ->
+                (0 until arr.length()).mapNotNull { o ->
+                    (arr.optJSONObject(o) ?: return@mapNotNull null).let {
+                        AlbumItem(it.optLong("id"), it.optString("name"), it.optString("picUrl"),
+                            it.optJSONObject("artist")?.optString("name") ?: "", it.optLong("publishTime"), it.optInt("size"))
+                    }
                 }
+            } ?: emptyList()
+        } else emptyList()
+        SearchResult(
+            songList, artists, albums,
+            hasMore = songsRes?.optBoolean("hasMore", false) == true,
+            total = songsRes?.optInt("songCount", 0) ?: 0,
+        )
+    }
+
+    /**
+     * 搜歌单（`type=1000`）。
+     *
+     * 返回结构与 `/user/playlist` 基本一致（id/name/coverImgUrl/trackCount/playCount），
+     * 所以直接复用 [PlaylistItem]；`subscribed` 留空，由收藏栏自行判断。
+     */
+    suspend fun searchPlaylists(kw: String, limit: Int = 6, offset: Int = 0): List<PlaylistItem> =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("s", kw).put("limit", limit).put("offset", offset)
+                .put("type", 1000).put("csrf_token", "").put("hlpretag", "").put("hlposttag", "")
+            val j = we("/cloudsearch/get/web", body)
+            val arr = j.optJSONObject("result")?.optJSONArray("playlists") ?: return@withContext emptyList()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val id = o.optLong("id")
+                if (id <= 0L) return@mapNotNull null
+                PlaylistItem(
+                    id = id,
+                    name = o.optString("name"),
+                    coverUrl = o.optString("coverImgUrl").takeIf { it.isNotEmpty() },
+                    trackCount = o.optInt("trackCount"),
+                    playCount = o.optLong("playCount"),
+                    isMine = false,
+                    creatorName = o.optJSONObject("creator")?.optString("nickname")
+                        ?.takeIf { it.isNotBlank() },
+                )
             }
-        } ?: emptyList()
-        SearchResult(songList, artists, albums)
+        }
+
+    // ---------- 官方榜单 ----------
+
+    /**
+     * 榜单列表。
+     *
+     * `/api/toplist` 是少数只认明文 GET 的接口（走 weapi 会 404），所以用 [getJson]。
+     * 返回的 `tracks` 恒为 null —— 榜单不含歌曲，取歌要用 id 调 [playlistDetail]。
+     */
+    suspend fun toplist(): List<ToplistItem> = withContext(Dispatchers.IO) {
+        val j = getJson("https://music.163.com/api/toplist")
+        if (j.optInt("code", 0) != 200) return@withContext emptyList()
+        val arr = j.optJSONArray("list") ?: return@withContext emptyList()
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optLong("id")
+            if (id <= 0L) return@mapNotNull null
+            ToplistItem(
+                id = id,
+                name = o.optString("name"),
+                coverUrl = o.optString("coverImgUrl").takeIf { it.isNotEmpty() },
+                trackCount = o.optInt("trackCount"),
+                playCount = o.optLong("playCount"),
+                updateFrequency = o.optString("updateFrequency").takeIf { it.isNotBlank() },
+                updateTime = o.optLong("updateTime"),
+            )
+        }
     }
 
     /** 只搜歌（歌词在线兜底匹配用）—— search() 会连搜艺人/专辑共三次请求，这里只发一次 */
@@ -602,7 +711,10 @@ object NcmApi {
                         we("/v3/song/detail", JSONObject().put("c", cArr.toString()).put("ids", JSONArray(chunk).toString()))
                     }.getOrNull()
                     // 防御：服务端不保证返回顺序=请求顺序，按 id 归位，保持调用方给定的顺序
-                    val byId = songs(j?.optJSONArray("songs")).associateBy { it.id }
+                    // privileges 与 songs 一一对应：贴上版权状态，列表里能提前置灰不可播曲目
+                    val byId = songs(j?.optJSONArray("songs"))
+                        .withPrivilege(j?.optJSONArray("privileges"))
+                        .associateBy { it.id }
                     chunk.mapNotNull { byId[it] }
                 }
             }.flatMap { it.await() }
@@ -1193,7 +1305,9 @@ object NcmApi {
         val trackIds = p.optJSONArray("trackIds")?.let { a -> (0 until a.length()).map { a.optJSONObject(it)?.optLong("id") ?: 0L } } ?: emptyList()
         val missing = trackIds.filter { id -> tracks.none { it.id == id } }
         if (missing.isNotEmpty()) tracks += songDetail(missing)
-        item to tracks
+        // privileges 与 trackIds 等长，覆盖整个歌单（含只出现在 trackIds 里的曲目）
+        val priv = j.optJSONArray("privileges") ?: p.optJSONArray("privileges")
+        item to tracks.withPrivilege(priv)
     }
 
     suspend fun createPlaylist(name: String): Long? = withContext(Dispatchers.IO) {
@@ -1212,7 +1326,11 @@ object NcmApi {
         val j = we("/v1/album/$id", JSONObject())
         if (!ok(j)) return@withContext null
         val al = j.optJSONObject("album") ?: return@withContext null
-        Triple(al.optString("name"), al.optString("picUrl"), songs(j.optJSONArray("songs")))
+        Triple(
+            al.optString("name"),
+            al.optString("picUrl"),
+            songs(j.optJSONArray("songs")).withPrivilege(j.optJSONArray("privileges")),
+        )
     }
 
     data class ArtistPage(val artist: ArtistItem, val songs: List<Song>)
@@ -1312,7 +1430,7 @@ object NcmApi {
 
     /** JSON 对象 → 表单键值（明文 api 通道用） */
     private fun jsonToForm(o: JSONObject): Map<String, String> =
-        o.keys().asSequence().associateWith { k -> o.opt(k).toString() }
+        o.keys().asSequence().associateWith { k -> o.opt(k)?.toString() ?: "" }
 
     /**
      * 官方把私信正文**又包了一层 JSON**：外层 `{msgId, msg:"{...}", type}`，内层 `{msg, type, title}`。

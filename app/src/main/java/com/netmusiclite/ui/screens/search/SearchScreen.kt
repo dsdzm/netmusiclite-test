@@ -33,6 +33,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +62,8 @@ import com.netmusiclite.ui.components.CircularSideProgress
 import com.netmusiclite.ui.components.DialogScrim
 import com.netmusiclite.ui.components.NcmToast
 import com.netmusiclite.ui.components.NcmIcons
+import com.netmusiclite.ui.components.PlaylistCard
+import com.netmusiclite.ui.components.PlaylistSectionHeader
 import com.netmusiclite.ui.components.SongRow
 import com.netmusiclite.ui.components.estimateProgress
 import com.netmusiclite.ui.components.ArtistCapsule
@@ -77,6 +80,7 @@ import com.netmusiclite.ui.theme.SurfaceGlass
 import com.netmusiclite.ui.theme.TextPrimary
 import com.netmusiclite.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 搜索：350ms 防抖真实搜索。
@@ -89,32 +93,64 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
     var kw by remember { mutableStateOf(initialQuery ?: "") }
     var result by remember { mutableStateOf<NcmApi.SearchResult?>(null) }
     var loading by remember { mutableStateOf(false) }
+    // 分页累积（2026-10-19）：服务端每页 20 条，翻页只追加歌曲，艺人/专辑沿用首屏
+    var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    // 相关歌单（type=1000）：放在歌曲列表之后，晚到不影响首屏阅读
+    var playlists by remember { mutableStateOf<List<com.netmusiclite.data.PlaylistItem>>(emptyList()) }
     var history by remember { mutableStateOf(SearchHistoryStore.load(ctx)) }
     var hotList by remember { mutableStateOf<List<HotSearch>>(emptyList()) }
     val listState = rememberLazyListState()
     // 长按歌曲弹出的操作目标（null = 不显示操作浮层）
     var actionSong by remember { mutableStateOf<Song?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(toast) { if (toast != null) { delay(1800); toast = null } }
 
     LaunchedEffect(Unit) { hotList = PageCache.searchHot() }
 
     LaunchedEffect(kw) {
-        if (kw.isBlank()) { result = null; return@LaunchedEffect }
+        if (kw.isBlank()) {
+            result = null
+            songs = emptyList()
+            playlists = emptyList()
+            hasMore = false
+            return@LaunchedEffect
+        }
         delay(350)
         loading = true
-        result = NcmApi.search(kw.trim())
+        val r = NcmApi.search(kw.trim())
+        result = r
+        songs = r.songs
+        hasMore = r.hasMore
         loading = false
         // 搜索成功（有结果）才写历史：最新在前、去重、上限 10 条
-        if (result?.songs?.isNotEmpty() == true) {
+        if (r.songs.isNotEmpty()) {
             SearchHistoryStore.add(ctx, kw.trim())
             history = SearchHistoryStore.load(ctx)
         }
+        // 歌单段单独一次请求：失败不影响歌曲结果
+        playlists = runCatching { NcmApi.searchPlaylists(kw.trim()) }.getOrDefault(emptyList())
     }
 
-    val songs = result?.songs ?: emptyList()
+    /** 翻页：只追加，按 id 去重（服务端相邻页偶有重叠） */
+    fun loadMore() {
+        if (!hasMore || loadingMore || loading) return
+        loadingMore = true
+        scope.launch {
+            val r = runCatching { NcmApi.search(kw.trim(), limit = 20, offset = songs.size) }
+                .getOrDefault(NcmApi.SearchResult(emptyList(), emptyList(), emptyList()))
+            val known = songs.mapTo(HashSet()) { it.id }
+            songs = songs + r.songs.filter { known.add(it.id) }
+            hasMore = r.hasMore
+            loadingMore = false
+        }
+    }
+
     val artists = result?.artists ?: emptyList()
+    val total = result?.total ?: 0
 
     // 空查询 → 「历史 + 热搜」组合页；输入关键词/有结果 → 结果列表
     val emptyState = kw.isBlank() && result == null
@@ -122,7 +158,8 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
     // 侧缘进度环：按当前列表实际条目数动态估算，不写死
     val listItemCount = when {
         emptyState -> (if (history.isNotEmpty()) 3 else 0) + 1 + hotList.size
-        result != null -> songs.size + (if (artists.isNotEmpty()) 1 else 0)
+        result != null -> songs.size + (if (artists.isNotEmpty()) 1 else 0) + 1 +
+            (if (playlists.isNotEmpty()) 1 + playlists.size else 0)
         else -> 1
     }
 
@@ -234,6 +271,8 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
                         SongRow(
                             song = song,
                             isCurrent = PlayerEngine.current?.id == song.id,
+                            // 云搜索不带 privilege，available 多为 null（未知），只有明确 false 才置灰
+                            unavailable = song.available == false,
                             // 跨语言搜索：中文词命中日文歌时，把命中的译名标出来
                             aliasHint = com.netmusiclite.data.SongQuery.matchedAlias(song, kw.trim()),
                             onClick = {
@@ -243,6 +282,60 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
                             // 长按出操作浮层：添加到列表 / 下一首播放（2026-10-01）
                             onLongClick = { actionSong = song },
                         )
+                    }
+
+                    // 分页（2026-10-19）：显式按钮而非自动加载 —— 圆屏上误触滚动很容易
+                    // 一路滑到底，自动翻页会连着发好几个请求
+                    if (hasMore) {
+                        item(key = "load_more") {
+                            Box(
+                                Modifier.fillMaxWidth().height(44.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    if (loadingMore) {
+                                        "加载中…"
+                                    } else if (total > 0) {
+                                        "加载更多（${songs.size}/$total）"
+                                    } else {
+                                        "加载更多"
+                                    },
+                                    fontSize = 10.sp,
+                                    color = if (loadingMore) TextSecondary.copy(alpha = 0.5f) else Accent,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(SurfaceGlass)
+                                        .clickable(enabled = !loadingMore) { loadMore() }
+                                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    // 相关歌单（type=1000）：放在歌曲之后，避免抢歌曲结果的位置
+                    if (playlists.isNotEmpty()) {
+                        item(key = "playlist_header") {
+                            PlaylistSectionHeader("相关歌单", playlists.size)
+                        }
+                        itemsIndexed(
+                            playlists,
+                            key = { _, p -> "search_pl_${p.id}" },
+                            contentType = { _, _ -> "playlist" },
+                        ) { _, pl ->
+                            PlaylistCard(
+                                pl = pl,
+                                subtitle = buildString {
+                                    pl.creatorName?.takeIf { it.isNotBlank() }?.let { append("$it · ") }
+                                    append("${pl.trackCount} 首")
+                                },
+                            ) {
+                                nav.navigateWithMotion(
+                                    Routes.playlistDetail(pl.id),
+                                    NavMotionSpec(NavMotionKind.Pill),
+                                )
+                            }
+                        }
                     }
                 }
             }

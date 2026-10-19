@@ -29,6 +29,14 @@ data class Song(
      * 空集合表示「尚未解析」，不代表没有别名。
      */
     val aliases: List<String> = emptyList(),
+    /**
+     * 版权可播状态（来自详情/歌单/专辑接口的 `privilege`）：
+     * `st >= 0 && pl > 0` 为可播，`pl == 0` 或无版权为不可播。
+     *
+     * `null` 表示**未知** —— 搜索结果不带 `privilege`，不能把未知当成不可播，
+     * 否则会把正常歌曲显示成置灰。UI 只在 `== false` 时做降级展示。
+     */
+    val available: Boolean? = null,
 )
 
 @Immutable
@@ -58,6 +66,26 @@ data class PlaylistItem(
     val creatorName: String? = null,
     /** 5 = 我喜欢的音乐，20 = 年度歌单；用于展示/区分，不参与业务判断 */
     val specialType: Int = 0,
+)
+
+/**
+ * 官方榜单（`/api/toplist`）。
+ *
+ * 榜单本身不含歌曲（`tracks` 恒为 null），取歌要用 [id] 当歌单 id 调 playlistDetail。
+ * 因此这里不复用 [PlaylistItem]：字段语义不同（榜单没有「收藏」「创建者」，
+ * 但有更新频率与更新时间，列表里要显示「每周四更新」这类文案）。
+ */
+@Immutable
+data class ToplistItem(
+    val id: Long,
+    val name: String,
+    val coverUrl: String?,
+    val trackCount: Int,
+    val playCount: Long,
+    /** 服务端排好的更新频率文案，如「每周四更新」「刚刚更新」；可能为空 */
+    val updateFrequency: String? = null,
+    /** 更新时间（毫秒），0 表示服务端未给 */
+    val updateTime: Long = 0L,
 )
 
 @Immutable

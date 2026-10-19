@@ -13,6 +13,8 @@ object Routes {
     const val DAILY_RECOMMEND = "daily_recommend"
     /** 个性化推荐：推荐歌单 + 推荐新歌（主页入口） */
     const val RECOMMEND = "recommend"
+    /** 官方排行榜（/api/toplist，64 个榜单；点进去复用歌单详情页） */
+    const val TOPLIST = "toplist"
     const val LIKED_SONGS = "liked_songs"
     const val MY_PLAYLISTS = "my_playlists"
     const val LOCAL_MUSIC = "local_music"

@@ -55,6 +55,11 @@ fun SongRow(
      * 让用户一眼看懂为什么搜索结果里会出现一首外文标题的歌。歌名本身命中时传 null。
      */
     aliasHint: String? = null,
+    /**
+     * 版权受限（`privilege.st < 0 || pl == 0`）时置灰并标注「不可播」。
+     * 只在**明确知道**不可播时传 true —— 搜索结果不带 privilege，状态未知，别传。
+     */
+    unavailable: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -77,11 +82,19 @@ fun SongRow(
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                song.title, fontSize = 12.sp, color = if (isCurrent) Accent else TextPrimary,
+                song.title, fontSize = 12.sp,
+                color = when {
+                    isCurrent -> Accent
+                    unavailable -> TextTertiary
+                    else -> TextPrimary
+                },
                 fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(songSubtitle(song, aliasHint), fontSize = 9.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                songSubtitle(song, aliasHint, unavailable),
+                fontSize = 9.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         if (selectMode) {
             Spacer(Modifier.width(8.dp))
@@ -106,10 +119,19 @@ fun SongRow(
  * 汇成一条 AnnotatedString 而不是两个 Text 并排，是为了让省略号统一作用在整行上
  * （并排时两个 Text 各自截断，窄屏上会变成「YOASO… · 向夜…」这种双截断）。
  */
-internal fun songSubtitle(song: Song, aliasHint: String?): androidx.compose.ui.text.AnnotatedString =
+internal fun songSubtitle(
+    song: Song,
+    aliasHint: String?,
+    unavailable: Boolean = false,
+): androidx.compose.ui.text.AnnotatedString =
     androidx.compose.ui.text.buildAnnotatedString {
         append(song.artist)
-        if (!aliasHint.isNullOrBlank()) {
+        if (unavailable) {
+            // 明确不可播：用第三级文字色标注，避免整行看不出为什么点了没反应
+            withStyle(androidx.compose.ui.text.SpanStyle(color = TextTertiary)) {
+                append(" · 不可播")
+            }
+        } else if (!aliasHint.isNullOrBlank()) {
             withStyle(androidx.compose.ui.text.SpanStyle(color = Accent)) {
                 append(" · ")
                 append(aliasHint)

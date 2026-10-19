@@ -64,6 +64,7 @@ app/src/main/java/com/netmusiclite/
 - [2026-10-18 收藏的歌单并入收藏栏，新增独立推荐页](docs/updates/2026-10-18-推荐页与收藏整合.md)
 - [2026-10-18 移植到上游 1.32 的对接指南](docs/updates/2026-10-18-移植到上游1.32.md)（配套代码见 [`docs/updates/port-1.32/`](docs/updates/port-1.32/)）
 - [2026-10-19 ncm-api-kit 接入评估](docs/updates/2026-10-19-ncm-api-kit接入评估.md)
+- [2026-10-19 ncm-api-kit 四项接入（排行榜/搜索翻页/搜歌单/可播状态）](docs/updates/2026-10-19-ncm-api-kit四项接入.md)
 
 ## 免责声明
 
