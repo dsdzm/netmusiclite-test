@@ -583,7 +583,18 @@ object NcmApi {
         val songs: List<Song>,
         val artists: List<ArtistItem>,
         val albums: List<AlbumItem>,
-        /** 是否还有下一页（服务端 `result.hasMore`）；false 时 UI 停止加载 */
+        /**
+         * 是否还有下一页。
+         *
+         * **不能只信服务端的 `result.hasMore`**：cloudsearch 并不稳定下发该字段
+         * （2026-10-19 真机复现：按钮不出现，日志确认响应里没有 hasMore）。
+         * 第三方实现（folia-major、Mineradio）都是自行按 `songCount` 计算的：
+         * `offset + 本页条数 < total`。这里的优先级：
+         * 1. 服务端显式给了 `hasMore` 就用它；
+         * 2. 否则有 `songCount` 就自己算；
+         * 3. 两者都没有（total=0）才按「满页」保守猜 —— 最多多发一次空请求，
+         *    不会漏掉后面的结果。
+         */
         val hasMore: Boolean = false,
         /** 命中总数（服务端 `result.songCount`）；0 表示服务端未返回 */
         val total: Int = 0,
@@ -624,10 +635,14 @@ object NcmApi {
                 }
             } ?: emptyList()
         } else emptyList()
+        val total = songsRes?.optInt("songCount", 0) ?: 0
         SearchResult(
             songList, artists, albums,
-            hasMore = songsRes?.optBoolean("hasMore", false) == true,
-            total = songsRes?.optInt("songCount", 0) ?: 0,
+            // hasMore 三级兜底，详见 SearchResult 注释：服务端字段不可靠，按 songCount 自算
+            hasMore = songsRes?.optBoolean("hasMore", false) == true ||
+                if (total > 0) offset + songList.size < total
+                else songList.size >= limit,
+            total = total,
         )
     }
 

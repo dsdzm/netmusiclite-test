@@ -97,6 +97,9 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var hasMore by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
+    // 下一页的请求 offset：**不能拿 songs.size 当 offset** —— 相邻页重叠的曲目会被
+    // 去重掉，size 会落后于服务端真实 offset，继续翻会漏歌。必须独立计数。
+    var nextOffset by remember { mutableStateOf(0) }
     // 相关歌单（type=1000）：放在歌曲列表之后，晚到不影响首屏阅读
     var playlists by remember { mutableStateOf<List<com.netmusiclite.data.PlaylistItem>>(emptyList()) }
     var history by remember { mutableStateOf(SearchHistoryStore.load(ctx)) }
@@ -117,6 +120,7 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
             songs = emptyList()
             playlists = emptyList()
             hasMore = false
+            nextOffset = 0
             return@LaunchedEffect
         }
         delay(350)
@@ -125,6 +129,7 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
         result = r
         songs = r.songs
         hasMore = r.hasMore
+        nextOffset = r.songs.size
         loading = false
         // 搜索成功（有结果）才写历史：最新在前、去重、上限 10 条
         if (r.songs.isNotEmpty()) {
@@ -135,15 +140,18 @@ fun SearchScreen(nav: NavHostController, initialQuery: String? = null) {
         playlists = runCatching { NcmApi.searchPlaylists(kw.trim()) }.getOrDefault(emptyList())
     }
 
-    /** 翻页：只追加，按 id 去重（服务端相邻页偶有重叠） */
+    /** 翻页：只追加，按 id 去重（服务端相邻页偶有重叠）；offset 独立计数防漏歌 */
     fun loadMore() {
         if (!hasMore || loadingMore || loading) return
         loadingMore = true
         scope.launch {
-            val r = runCatching { NcmApi.search(kw.trim(), limit = 20, offset = songs.size) }
+            val r = runCatching { NcmApi.search(kw.trim(), limit = 20, offset = nextOffset) }
                 .getOrDefault(NcmApi.SearchResult(emptyList(), emptyList(), emptyList()))
             val known = songs.mapTo(HashSet()) { it.id }
             songs = songs + r.songs.filter { known.add(it.id) }
+            // offset 按服务端口径推进：本页实际拿到多少条就走多少，
+            // 与去重后的列表长度脱钩，避免重叠页导致 offset 滞后漏歌
+            nextOffset += if (r.songs.isNotEmpty()) r.songs.size else 20
             hasMore = r.hasMore
             loadingMore = false
         }

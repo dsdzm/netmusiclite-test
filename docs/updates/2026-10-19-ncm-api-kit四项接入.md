@@ -286,7 +286,18 @@ data class SearchResult(
     val songs: List<Song>,
     val artists: List<ArtistItem>,
     val albums: List<AlbumItem>,
-    /** 是否还有下一页（服务端 `result.hasMore`）；false 时 UI 停止加载 */
+    /**
+     * 是否还有下一页。
+     *
+     * **不能只信服务端的 `result.hasMore`**：cloudsearch 并不稳定下发该字段
+     * （2026-10-19 真机复现：按钮不出现，响应里没有 hasMore）。
+     * 第三方实现（folia-major、Mineradio）都是自行按 `songCount` 计算的：
+     * `offset + 本页条数 < total`。这里的优先级：
+     * 1. 服务端显式给了 `hasMore` 就用它；
+     * 2. 否则有 `songCount` 就自己算；
+     * 3. 两者都没有（total=0）才按「满页」保守猜 —— 最多多发一次空请求，
+     *    不会漏掉后面的结果。
+     */
     val hasMore: Boolean = false,
     /** 命中总数（服务端 `result.songCount`）；0 表示服务端未返回 */
     val total: Int = 0,
@@ -330,10 +341,14 @@ suspend fun search(kw: String, limit: Int = 20, offset: Int = 0): SearchResult =
                 }
             } ?: emptyList()
         } else emptyList()
+        val total = songsRes?.optInt("songCount", 0) ?: 0
         SearchResult(
             songList, artists, albums,
-            hasMore = songsRes?.optBoolean("hasMore", false) == true,
-            total = songsRes?.optInt("songCount", 0) ?: 0,
+            // hasMore 三级兜底，详见 SearchResult 注释：服务端字段不可靠，按 songCount 自算
+            hasMore = songsRes?.optBoolean("hasMore", false) == true ||
+                if (total > 0) offset + songList.size < total
+                else songList.size >= limit,
+            total = total,
         )
     }
 ```
@@ -349,18 +364,49 @@ suspend fun search(kw: String, limit: Int = 20, offset: Int = 0): SearchResult =
 var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
 var hasMore by remember { mutableStateOf(false) }
 var loadingMore by remember { mutableStateOf(false) }
+// 下一页的请求 offset：**不能拿 songs.size 当 offset** —— 相邻页重叠的曲目会被
+// 去重掉，size 会落后于服务端真实 offset，继续翻会漏歌。必须独立计数。
+var nextOffset by remember { mutableStateOf(0) }
 // 相关歌单（type=1000）：放在歌曲列表之后，晚到不影响首屏阅读
 var playlists by remember { mutableStateOf<List<com.netmusiclite.data.PlaylistItem>>(emptyList()) }
+```
 
-/** 翻页：只追加，按 id 去重（服务端相邻页偶有重叠） */
+搜索入口处重置 `nextOffset`（换关键词时从 0 开始）：
+
+```kotlin
+if (kw.isBlank()) {
+    result = null
+    songs = emptyList()
+    playlists = emptyList()
+    hasMore = false
+    nextOffset = 0
+    return@LaunchedEffect
+}
+delay(350)
+loading = true
+val r = NcmApi.search(kw.trim())
+result = r
+songs = r.songs
+hasMore = r.hasMore
+nextOffset = r.songs.size
+loading = false
+```
+
+翻页函数：
+
+```kotlin
+/** 翻页：只追加，按 id 去重（服务端相邻页偶有重叠）；offset 独立计数防漏歌 */
 fun loadMore() {
     if (!hasMore || loadingMore || loading) return
     loadingMore = true
     scope.launch {
-        val r = runCatching { NcmApi.search(kw.trim(), limit = 20, offset = songs.size) }
+        val r = runCatching { NcmApi.search(kw.trim(), limit = 20, offset = nextOffset) }
             .getOrDefault(NcmApi.SearchResult(emptyList(), emptyList(), emptyList()))
         val known = songs.mapTo(HashSet()) { it.id }
         songs = songs + r.songs.filter { known.add(it.id) }
+        // offset 按服务端口径推进：本页实际拿到多少条就走多少，
+        // 与去重后的列表长度脱钩，避免重叠页导致 offset 滞后漏歌
+        nextOffset += if (r.songs.isNotEmpty()) r.songs.size else 20
         hasMore = r.hasMore
         loadingMore = false
     }
@@ -428,6 +474,37 @@ if (playlists.isNotEmpty()) {
 result != null -> songs.size + (if (artists.isNotEmpty()) 1 else 0) + 1 +
     (if (playlists.isNotEmpty()) 1 + playlists.size else 0)
 ```
+
+### 4.3 修复记录：首版翻页按钮不显示（2026-10-19 当晚）
+
+**现象**（真机反馈）：搜索页单曲列表滚到底后，没有「加载更多」按钮，直接就是「相关歌单」分段。
+
+**根因**：首版 `hasMore` 只读了服务端的 `result.hasMore`：
+
+```kotlin
+hasMore = songsRes?.optBoolean("hasMore", false) == true   // ❌ 恒为 false
+```
+
+`/cloudsearch/get/web` **并不稳定下发 `hasMore` 字段**（真机响应里没有它），
+`optBoolean(..., false)` 于是恒为 false → `if (hasMore)` 不成立 → 按钮 item 不渲染。
+评估文档里实测翻页用的是明文 `/api/search/get`（该接口有 `hasMore`），
+而实现接在 weapi cloudsearch 上，两个接口的响应结构不同 —— 这是本次踩坑的来源。
+
+**佐证**：GitHub 上真实消费 cloudsearch 的项目都不信这个字段，均自行按 `songCount` 计算：
+
+| 项目 | 算法 |
+|---|---|
+| folia-major（neteaseProvider.ts） | `hasMore = offset + items.length < total`，total 取 `result.songCount` |
+| Mineradio（server.js） | `hasMore = total ? nextOffset < total : items.length >= limit` |
+
+**修复**：三级兜底（见 4.1 代码），任一路径可自愈：
+服务端 `hasMore` → 有则用；`songCount` → 自算 `offset + 本页条数 < total`；
+都没有 → 按「满页」保守猜（最多多发一次空请求，不会漏结果）。
+矛盾时（服务端 false 但数学算出来还有）以数学为准 —— 与第三方实现共识一致。
+
+**连带修复**：`loadMore` 原来用 `songs.size` 当请求 offset。相邻页重叠曲目被去重后
+`songs.size` 会小于服务端真实 offset，继续翻会**漏歌**。改为独立的 `nextOffset` 计数器，
+按本页实际返回条数推进。
 
 ---
 
@@ -644,7 +721,7 @@ unavailable = song.available == false,
 - [ ] 排行榜列表加载出 64 个榜单，副标题显示「每周四更新 · 100 首」这类文案
 - [ ] 点「飙升榜」进入歌单详情，能正常拉到 100 首歌并播放
 - [ ] 搜索「海阔天空」：首屏 20 条，底部出现「加载更多（20/306）」；连点几次总数增长；
-      翻到底 `hasMore=false` 后按钮消失，不再发请求
+      翻到底 `hasMore=false` 后按钮消失，不再发请求（曾因 cloudsearch 不下发 hasMore 导致按钮不显示，已按 songCount 自算修复，见 4.3）
 - [ ] 搜索「华语」：歌曲列表后出现「相关歌单」分段，点击进歌单详情
 - [ ] 打开一个含灰色歌曲的歌单/专辑：不可播曲目置灰、副标题有「· 不可播」，点击仍可点但不报错
 - [ ] 搜索结果（无 privilege）不出现误置灰
